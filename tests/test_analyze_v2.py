@@ -92,7 +92,11 @@ def v2_pipeline(tmp_path_factory):
     r2 = run_module("bili_story_pipe.cross_check", "--work-dir", work, "--title", TITLE)
     assert r2.returncode == 0, f"cross_check 失败:\n{r2.stdout}\n{r2.stderr}"
     r3 = run_module(
-        "bili_story_pipe.build_viewer", "--work-dir", work, "--output", "demo.html"
+        "bili_story_pipe.build_viewer",
+        "--plot", str(out / "plot_structured.json"),
+        "--script", str(out / "script_bilingual.jsonl"),
+        "--cross", str(out / "cross_check.json"),
+        "--output", str(work / "demo.html"),
     )
     assert r3.returncode == 0, f"build_viewer 失败:\n{r3.stdout}\n{r3.stderr}"
     print("\n[summarize_mr]", r1.stdout.strip())
@@ -263,4 +267,5 @@ def test_v2_pipeline_end_to_end(v2_pipeline):
 
     html = (v2_pipeline / "demo.html").read_text(encoding="utf-8")
     assert html.startswith("<!DOCTYPE html>")
-    assert '<script id="viewer-data" type="application/json">' in html
+    assert '<script id="viewer-data">' in html
+    assert 'id="chars"' in html and 'id="causal"' in html

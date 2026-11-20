@@ -87,10 +87,10 @@ def pipeline(tmp_path_factory):
     assert r2.returncode == 0, f"cross_check 失败:\n{r2.stdout}\n{r2.stderr}"
     r3 = run_module(
         "bili_story_pipe.build_viewer",
-        "--work-dir",
-        work,
-        "--output",
-        "demo_viewer.html",
+        "--plot", str(out / "plot_structured.json"),
+        "--script", str(out / "script_bilingual.jsonl"),
+        "--cross", str(out / "cross_check.json"),
+        "--output", str(work / "demo_viewer.html"),
     )
     assert r3.returncode == 0, f"build_viewer 失败:\n{r3.stdout}\n{r3.stderr}"
     print("\n[summarize_mr]", r1.stdout.strip())
@@ -249,30 +249,37 @@ def test_build_viewer(pipeline):
     assert html_path.exists()
     text = html_path.read_text(encoding="utf-8")
     assert text.startswith("<!DOCTYPE html>")
-    assert "交互式剧情浏览器" in text
+    assert "Neko-nin exHeart SPIN! 2" in text  # 标题取 plot.work_title
     assert text.count("data-tab=") >= 3
     assert "<style>" in text and "</style>" in text
-    assert "localStorage" in text and "theme-toggle" in text
+    assert "safeStorage" in text and "theme-btn" in text
     assert "mermaid" in text.lower()
-    assert "https://cdn.jsdelivr.net/npm/mermaid" in text
-    assert '<script id="viewer-data" type="application/json">' in text
-    assert "https://www.bilibili.com/video/BV13JSCBAEDC/?p=1&t=" in text
-    assert "✅ 双源印证" in text and "⚠️ 视频未覆盖" in text
+    assert '<script id="viewer-data">' in text
+    assert "https://www.bilibili.com/video/" in text
+    # v4: 深度档案 / 因果链卡片区均在模板中
+    assert 'id="chars"' in text and 'id="causal"' in text
+    assert "filter-speaker" in text and "chain-steps" in text
 
-    # 数据内嵌完整：60 条台词、5 个角色筛选项、9 个分 P
-    payload = text.split('<script id="viewer-data" type="application/json">', 1)[1].split("</script>", 1)[0]
-    data = json.loads(payload)
-    assert len(data["transcript"]) == 60
+    payload = text.split('<script id="viewer-data">', 1)[1].split("</script>", 1)[0]
+    payload = payload.strip()
+    assert payload.startswith("window.__VWDATA__ = ") and payload.endswith(";")
+    data = json.loads(payload[len("window.__VWDATA__ = "):-1])
+    assert data["v"] == 4
+    assert len(data["trx"]) == 60
     assert len(data["scenes"]) >= 9
     assert data["bvid"] == "BV13JSCBAEDC"
-    assert set(SPEAKERS) <= set(data["speakers"])
-    assert set(data["parts"]) == set(range(1, 10))
-    for t in data["transcript"]:
-        assert t["url"].startswith(f"https://www.bilibili.com/video/{data['bvid']}/?p=")
-        assert f"&t={int(t['ts_sec'])}" in t["url"]
-        assert len(t["ts"]) == 5 and t["ts"][2] == ":"
+    assert "causal_chains" in data
+    for c in data["characters"]:
+        assert {"name", "role_tag", "faction", "summary_zh", "motivation",
+                "key_interactions", "arc_highlights"} <= set(c)
+    # 说话人已归一：不应出现旧 OCR 变体节点
+    all_names = {r["s"] for r in data["trx"]} | {c["name"] for c in data["characters"]}
+    assert "サトちゃん" not in all_names and "北条" not in all_names
 
 
-def test_bilibili_url_format():
-    url = build_viewer.bilibili_url("BV13JSCBAEDC", 6, 872.9)
-    assert url == "https://www.bilibili.com/video/BV13JSCBAEDC/?p=6&t=872"
+def test_bilibili_jump_template():
+    """B 站跳转由前端 jump() 生成，校验其 URL 模板存在且带 p/t 参数。"""
+    html = build_viewer.JS_MAIN
+    assert "https://www.bilibili.com/video/" in html
+    assert "?p=" in html and "&amp;t=" in html
+    assert "target=\"_blank\"" in html

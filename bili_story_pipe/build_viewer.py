@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""build_viewer.py v3 — compile bili-story-pipe outputs into ONE offline HTML viewer.
+"""build_viewer.py v4 — compile bili-story-pipe outputs into ONE offline HTML viewer.
+
+LAB-2135 upgrades (on top of all v3 fixes below):
+
+4. Tab 1 deep data quality.
+   - Profile cards render role_tag / faction badge / summary_zh / motivation /
+     key_interactions / arc_highlights, plus a one-click "筛选该角色台词" that
+     jumps to Tab 3 pre-filtered to that canonical speaker.
+   - New "跨章因果与关键伏笔" section renders ``plot.causal_chains``.
+   - The instant offline SVG now parses the semantic Mermaid graph (canonical
+     Top-15 nodes + real relation labels) instead of drawing a star with no labels.
 
 LAB-2132 fixes (all three fatal front-end bugs):
 
@@ -131,16 +141,18 @@ def assemble_data(
     characters = _first(plot, "characters", "character_profiles", "chars", default=[]) or []
     scenes = _first(plot, "scenes", "scene_cards", default=[]) or []
     mermaid = _first(plot, "mermaid", "mermaid_graph", "relation_graph", default="") or ""
+    causal = _first(plot, "causal_chains", "causal", "causal_chain", default=[]) or []
     coverage = _first(plot, "coverage_audit", "coverage", default={}) or {}
     cross_items = _first(cross, "items", "checks", "results", default=[]) or []
 
     return {
-        "v": 3,
-        "title": title or _first(plot, "title", default="剧情浏览器") or "剧情浏览器",
+        "v": 4,
+        "title": title or _first(plot, "work_title", "title", default="交互式剧情浏览器") or "交互式剧情浏览器",
         "bvid": bvid,
         "acts": acts,
         "characters": characters,
         "mermaid": mermaid if isinstance(mermaid, str) else "\n".join(map(str, mermaid)),
+        "causal_chains": causal,
         "scenes": scenes,
         "coverage": coverage,
         "cross": {"summary": _first(cross, "summary", default=""), "items": cross_items},
@@ -181,6 +193,19 @@ header h1{font-size:17px;margin:0;flex:1}
 .act{border-left:3px solid var(--accent);padding-left:12px;margin:10px 0}
 .offline-graph{overflow:auto}
 .offline-graph svg{display:block;margin:0 auto}
+.edge-label{font-size:10px;fill:var(--warn);paint-order:stroke;stroke:var(--bg);stroke-width:3px}
+.chead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.badge.faction{background:rgba(122,162,247,.16);color:var(--accent);margin-left:auto}
+.role-tag{color:var(--muted);font-size:12px;margin-bottom:6px}
+.profile-summary{margin:6px 0;font-size:13px}
+.profile-mot{margin:6px 0;font-size:12px}
+.profile-sub{margin:8px 0;font-size:12px;color:var(--muted)}
+.profile-sub ul{margin:4px 0 0;padding-left:18px}
+.chips{display:flex;flex-wrap:wrap;gap:5px;margin:4px 0}
+.chip{display:inline-block;padding:1px 7px;border:1px solid var(--line);border-radius:10px;font-size:11px;color:var(--muted)}
+.filter-speaker{margin-top:8px}
+.chain-steps{margin:6px 0;padding-left:20px}
+.step-no{display:inline-block;min-width:18px;color:var(--accent);font-weight:600}
 .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px}
 input[type=text]{padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg);min-width:240px}
 .filters{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
@@ -255,30 +280,53 @@ JS_MAIN = r"""
     var tabEls = document.querySelectorAll ? document.querySelectorAll(".tab") : [];
     for(var t=0;t<tabEls.length;t++){ (function(el){ el.addEventListener("click", function(){ switchTab(el.getAttribute("data-tab")); }); })(tabEls[t]); }
 
-    /* ---- 1. offline character graph (instant, no network) ---- */
+    /* ---- 1. offline SEMANTIC character graph (instant, no network) ---- */
+    /* Parse Mermaid text emitted by summarize_mr v3 (semantic edge labels). */
+    function parseGraph(){
+      var nodes=[], edges=[], ids={};
+      String(data.mermaid||"").split(/\r?\n/).forEach(function(line){
+        var n=line.match(/^\s*(C\d+)\["([^"]+)"\]\s*$/);
+        if(n){ ids[n[1]]=n[2]; nodes.push({id:n[1],name:n[2]}); return; }
+        var e=line.match(/^\s*(C\d+)\s*---\|"([^"]*)"\|\s*(C\d+)\s*$/);
+        if(e && ids[e[1]] && ids[e[3]]){
+          edges.push({a:ids[e[1]],b:ids[e[3]],label:e[2]});
+        }
+      });
+      if(!nodes.length){
+        nodes=(data.characters||[]).slice(0,15).map(function(c,i){ return {id:"C"+i,name:_name(c)}; });
+      }
+      return {nodes:nodes.slice(0,15), edges:edges};
+    }
     function renderOfflineGraph(){
       var host = $("graph");
       if(!host) return;
-      var chars = data.characters || [];
-      if(!chars.length){ host.innerHTML='<div class="muted">（暂无角色档案数据）</div>'; return; }
-      var W=760, H=Math.max(280, chars.length*46), cx=W/2, cy=H/2, R=Math.min(W,H)/2-90;
+      var g = parseGraph(), nodes = g.nodes, edges = g.edges;
+      if(!nodes.length){ host.innerHTML='<div class="muted">（暂无角色档案数据）</div>'; return; }
+      var W=760, H=Math.max(320, nodes.length*44), cx=W/2, cy=H/2, R=Math.min(W,H)/2-110;
       var parts=['<svg width="100%" height="'+H+'" viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg">'];
-      var pts=[];
-      for(var i=0;i<chars.length;i++){
-        var a = (2*Math.PI*i)/chars.length - Math.PI/2;
+      var pts=[], idx={};
+      for(var i=0;i<nodes.length;i++){
+        var a = (2*Math.PI*i)/nodes.length - Math.PI/2;
         pts.push([cx+R*Math.cos(a), cy+R*Math.sin(a)]);
+        idx[nodes[i].name]=i;
       }
-      for(var k=0;k<pts.length;k++){
-        parts.push('<line x1="'+cx+'" y1="'+cy+'" x2="'+pts[k][0].toFixed(1)+'" y2="'+pts[k][1].toFixed(1)+
-                   '" stroke="var(--line)" stroke-width="1.5"/>');
-      }
-      parts.push('<circle cx="'+cx+'" cy="'+cy+'" r="34" fill="var(--accent)" opacity="0.18"/>'+
-                 '<text x="'+cx+'" y="'+(cy+5)+'" text-anchor="middle" fill="var(--accent)" font-size="14">剧情</text>');
-      for(var m=0;m<chars.length;m++){
-        var nm = _name(chars[m]);
+      edges.forEach(function(ed){
+        var ia=idx[ed.a], ib=idx[ed.b];
+        if(ia==null || ib==null || ia===ib) return;
+        var x1=pts[ia][0], y1=pts[ia][1], x2=pts[ib][0], y2=pts[ib][1];
+        parts.push('<line x1="'+x1.toFixed(1)+'" y1="'+y1.toFixed(1)+'" x2="'+x2.toFixed(1)+
+                   '" y2="'+y2.toFixed(1)+'" stroke="var(--line)" stroke-width="1.5"/>');
+        if(ed.label){
+          var mx=(x1+x2)/2, my=(y1+y2)/2;
+          parts.push('<text class="edge-label" x="'+mx.toFixed(1)+'" y="'+(my-3).toFixed(1)+
+                     '" text-anchor="middle">'+esc(ed.label)+'</text>');
+        }
+      });
+      for(var m=0;m<nodes.length;m++){
+        var nm = nodes[m].name;
         var yy = pts[m][1]+4;
-        parts.push('<circle cx="'+pts[m][0].toFixed(1)+'" cy="'+pts[m][1].toFixed(1)+'" r="4" fill="var(--accent)"/>'+
-                   '<text x="'+(pts[m][0]>cx?pts[m][0]+9:pts[m][0]-9).toFixed(1)+'" y="'+yy.toFixed(1)+
+        parts.push('<circle cx="'+pts[m][0].toFixed(1)+'" cy="'+pts[m][1].toFixed(1)+'" r="5" fill="var(--accent)"/>'+
+                   '<text x="'+(pts[m][0]>cx?pts[m][0]+10:pts[m][0]-10).toFixed(1)+'" y="'+yy.toFixed(1)+
                    '" text-anchor="'+(pts[m][0]>cx?'start':'end')+'" fill="var(--fg)" font-size="12">'+esc(nm)+'</text>');
       }
       parts.push('</svg>');
@@ -308,23 +356,19 @@ JS_MAIN = r"""
     var mbtn=$("mermaid-btn"); if(mbtn) mbtn.addEventListener("click", loadMermaid);
     window.addEventListener("load", function(){ setTimeout(loadMermaid, 0); });
 
-    /* ---- overview cards ---- */
+    /* ---- overview cards (Tab 1, v4) ---- */
     function renderOverview(){
-      var actsHost=$("acts"), chHost=$("chars"), crHost=$("cross");
+      var actsHost=$("acts"), crHost=$("cross");
       if(actsHost){
         var acts=data.acts||[];
         actsHost.innerHTML = acts.length ? acts.map(function(a){
           var o=(typeof a==="string")?{text:a}:a;
-          return '<div class="act"><h3>'+esc(o.title||o.name||"")+'</h3><div>'+esc(o.text||o.summary||o.body||"")+'</div></div>';
+          return '<div class="act"><h3>'+esc(o.title||o.name||"")+'</h3><div>'+
+                 esc(o.summary_zh||o.text||o.summary||o.body||"")+'</div></div>';
         }).join("") : '<div class="muted">（暂无三幕总览数据）</div>';
       }
-      if(chHost){
-        var chars=data.characters||[];
-        chHost.innerHTML = chars.length ? chars.map(function(c){
-          return '<div class="card"><h3>'+esc(_name(c))+'</h3><div class="muted">'+esc(c.role||c.role_name||"")+'</div>'+
-                 '<div>'+esc(c.desc||c.summary||c.profile||"")+'</div></div>';
-        }).join("") : '<div class="muted">（暂无角色档案数据）</div>';
-      }
+      renderCharacters();
+      renderCausal();
       if(crHost){
         var cr=data.cross||{}, items=cr.items||[];
         var rows=items.map(function(it){
@@ -338,6 +382,62 @@ JS_MAIN = r"""
           (rows?'<table><thead><tr><th>状态</th><th>核验项</th><th>说明</th><th>来源</th></tr></thead><tbody>'+rows+'</tbody></table>':
            '<div class="muted">（暂无交叉校验数据）</div>')+'</div>';
       }
+    }
+
+    /* ---- v4: deep character profile cards ---- */
+    function renderCharacters(){
+      var chHost=$("chars"); if(!chHost) return;
+      var chars=data.characters||[];
+      if(!chars.length){ chHost.innerHTML='<div class="muted">（暂无角色档案数据）</div>'; return; }
+      chHost.innerHTML = chars.map(function(c){
+        var nm=_name(c);
+        var tag=c.role_tag||c.role_name||c.role||"";
+        var fac=c.faction||"";
+        var interactions=(c.key_interactions||[]).map(function(x){ return '<li>'+esc(x)+'</li>'; }).join("");
+        var arcs=(c.arc_highlights||[]).map(function(x){ return '<span class="chip">'+esc(x)+'</span>'; }).join("");
+        return '<div class="card profile">'+
+          '<div class="chead"><h3>'+esc(nm)+'</h3>'+(fac?'<span class="badge faction">'+esc(fac)+'</span>':'')+'</div>'+
+          (tag?'<div class="role-tag">'+esc(tag)+'</div>':'')+
+          '<div class="profile-summary">'+esc(c.summary_zh||c.desc||c.summary||c.profile||"")+'</div>'+
+          (c.motivation?'<div class="profile-mot"><b>核心动机</b> '+esc(c.motivation)+'</div>':'')+
+          (interactions?'<div class="profile-sub"><b>关键人际交互</b><ul>'+interactions+'</ul></div>':'')+
+          (arcs?'<div class="profile-sub"><b>分 P 高光</b><div class="chips">'+arcs+'</div></div>':'')+
+          '<button class="btn filter-speaker" data-speaker="'+esc(nm)+'">筛选该角色台词 →</button>'+
+        '</div>';
+      }).join("");
+      var btns=chHost.querySelectorAll?chHost.querySelectorAll("button.filter-speaker"):[];
+      for(var i=0;i<btns.length;i++){
+        (function(b){ b.addEventListener("click", function(){ filterBySpeaker(b.getAttribute("data-speaker")); }); })(btns[i]);
+      }
+    }
+
+    /* ---- v4: cross-chapter causal chains / foreshadowing ---- */
+    function renderCausal(){
+      var host=$("causal"); if(!host) return;
+      var chains=data.causal_chains||[];
+      if(!chains.length){ host.innerHTML='<div class="muted">（暂无跨章因果链数据）</div>'; return; }
+      host.innerHTML='<div class="grid">'+chains.map(function(ch){
+        var steps=(ch.steps||[]).map(function(s,i){
+          return '<li><span class="step-no">'+(i+1)+'.</span>'+esc(s)+'</li>';
+        }).join("");
+        var inv=(ch.involved||[]).map(function(n){ return '<span class="chip">'+esc(n)+'</span>'; }).join("");
+        return '<div class="card chain"><h3>'+esc(ch.title||"")+'</h3>'+
+          (steps?'<ol class="chain-steps">'+steps+'</ol>':'')+
+          (inv?'<div class="chips">'+inv+'</div>':'')+'</div>';
+      }).join("")+'</div>';
+    }
+
+    /* ---- v4: jump from a profile card to that character's lines in Tab 3 ---- */
+    function filterBySpeaker(name){
+      switchTab("trx");
+      ensureTrx();
+      var box=$("speaker-filters");
+      if(box && box.querySelectorAll){
+        var cs=box.querySelectorAll("input[type=checkbox]");
+        for(var i=0;i<cs.length;i++){ cs[i].checked = (cs[i].value===name); }
+      }
+      var s=$("search"); if(s) s.value="";
+      buildFiltered(); drawPage();
     }
 
     /* ---- scenes ---- */
@@ -448,7 +548,7 @@ JS_MAIN = r"""
     /* test/debug hook (harmless in production) */
     window.__VW_TEST__={
       safeStorage:safeStorage, fatal:fatal, ensureTrx:ensureTrx, switchTab:switchTab,
-      loadMermaid:loadMermaid,
+      loadMermaid:loadMermaid, filterBySpeaker:filterBySpeaker, renderOfflineGraph:renderOfflineGraph,
       state:function(){ return {ready:trxReady, page:curPage, rows:filtered.length,
         pageRows:(($("trx-body")||{}).innerHTML||"").split("<tr").length-1,
         theme:document.body.getAttribute("data-theme")}; }
@@ -482,6 +582,7 @@ HTML_TMPL = r"""<!DOCTYPE html>
   <p><button class="btn" id="mermaid-btn">尝试渲染 Mermaid 图（需联网，失败自动保留离线视图）</button></p>
   <div id="mermaid-host"></div>
   <h2>核心角色档案</h2><div class="grid" id="chars"></div>
+  <h2>跨章因果与关键伏笔</h2><div id="causal"></div>
   <h2>联网交叉校验</h2><div id="cross"></div>
 </div>
 <div class="panel" id="panel-scenes">
@@ -550,7 +651,7 @@ def write_viewer(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Build offline single-file HTML story viewer (v3)")
+    ap = argparse.ArgumentParser(description="Build offline single-file HTML story viewer (v4)")
     ap.add_argument("--plot", required=True)
     ap.add_argument("--script", required=True)
     ap.add_argument("--cross", default="")
@@ -559,7 +660,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--title", default="")
     args = ap.parse_args(argv)
     out = write_viewer(args.plot, args.script, args.cross, args.output, args.bvid, args.title)
-    print(f"[build_viewer v3] wrote {out} ({os.path.getsize(out)} bytes)", file=sys.stderr)
+    print(f"[build_viewer v4] wrote {out} ({os.path.getsize(out)} bytes)", file=sys.stderr)
     return 0
 
 

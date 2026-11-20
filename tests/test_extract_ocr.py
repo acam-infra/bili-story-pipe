@@ -231,22 +231,10 @@ def test_end_to_end_contract(synthesized):
     assert list((work / "output" / "low_conf").glob("P1_*.png")), "low_conf crop missing"
 
 
-def test_run_pipeline_missing_module_b_hint(tmp_path, capsys):
+def test_run_pipeline_missing_module_b_hint(tmp_path):
     from bili_story_pipe import run_pipeline as rp
 
-    missing = rp._module_b_missing()
-    assert {"summarize_mr", "cross_check", "build_viewer"}.issubset(set(missing))
-    work = tmp_path / "work"
-    (work / "output").mkdir(parents=True)
-    (work / "output" / "script.jsonl").write_text("", encoding="utf-8")
-    rc = rp.main([
-        "--bvid", "BV13JSCBAEDC",
-        "--videos-dir", ".",
-        "--work-dir", str(work),
-        "--skip-ocr",
-        "--llm-model", rp.DEFAULT_LLM_MODEL,
-    ])
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "模块 B 未就绪" in out
-    assert "summarize_mr.py" in out and "build_viewer.py" in out
+    # 模块 B（LAB-2127）现已全部合入，_module_b_missing 应为空列表。
+    assert rp._module_b_missing() == []
+    for name in ("summarize_mr", "cross_check", "build_viewer"):
+        assert name in rp.MODULE_B
