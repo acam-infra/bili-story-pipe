@@ -651,24 +651,24 @@ class RapidOCRBackend(BaseOCRBackend):
         self.v3 = False
         self._parse = _parse_rapid_page
         try:
-            from rapidocr import EngineConfig, EngineType, LangRec, RapidOCR  # type: ignore
+            import os
+            from rapidocr import EngineType, LangRec, ModelType, OCRVersion, RapidOCR  # type: ignore
 
-            cfg = EngineConfig()
-            try:
-                cfg.torch.use_cuda = bool(use_gpu)
-            except Exception:  # pragma: no cover - variant config object
-                try:
-                    cfg.use_cuda = bool(use_gpu)
-                except Exception:
-                    pass
-            kwargs: dict = {"engine_config": cfg}
-            torch = getattr(EngineType, "TORCH", None)
-            if torch is not None:
-                kwargs["det_engine_type"] = torch
-                kwargs["rec_engine_type"] = torch
-            kwargs["det_model_name"] = "ch_PP-OCRv4_det"
-            kwargs["rec_model_name"] = getattr(LangRec, "JAPAN", "japan")
-            self.engine = RapidOCR(**kwargs)
+            lang_key = os.environ.get("RAPID_LANG", "japan").strip().lower()
+            rec_lang = LangRec.CH if lang_key in ("ch", "zh", "cn", "chinese") else LangRec.JAPAN
+            params = {
+                "Global.use_cls": False,
+                "Det.engine_type": EngineType.TORCH,
+                "Det.ocr_version": OCRVersion.PPOCRV4,
+                "Det.model_type": ModelType.MOBILE,
+                "Rec.engine_type": EngineType.TORCH,
+                "Rec.lang_type": rec_lang,
+                "Rec.ocr_version": OCRVersion.PPOCRV4,
+                "Rec.model_type": ModelType.MOBILE,
+                "EngineConfig.torch.use_cuda": bool(use_gpu),
+                "EngineConfig.torch.gpu_id": 0,
+            }
+            self.engine = RapidOCR(params=params)
             self.v3 = True
             self._parse = _parse_rapid_v3_result
         except Exception:
