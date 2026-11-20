@@ -1,0 +1,3 @@
+# 模块 B：Map-Reduce 剧情归约 + VNDB 交叉校验 + 离线剧情浏览器
+requests>=2.31,<3
+pytest>=8,<10
