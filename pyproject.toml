@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bili-story-pipe"
+version = "0.4.0"
+description = "Automated visual-novel video dialogue extraction (RapidOCR-Torch Strip16), Map-Reduce plot structuring, VNDB cross-check, and offline interactive HTML viewer"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+extract = [
+    "numpy>=1.24",
+    "Pillow>=10.0",
+    "rapidocr>=3.0",
+]
+paddle = [
+    "numpy>=1.24",
+    "Pillow>=10.0",
+    "paddleocr>=2.7",
+]
+dev = [
+    "pytest>=7.4",
+    "numpy>=1.24",
+    "Pillow>=10.0",
+]
+
+[project.scripts]
+bili-story-pipe = "bili_story_pipe.run_pipeline:main"
+bili-extract-ocr = "bili_story_pipe.extract_ocr:main"
+bili-summarize-mr = "bili_story_pipe.summarize_mr:main"
+bili-cross-check = "bili_story_pipe.cross_check:main"
+bili-build-viewer = "bili_story_pipe.build_viewer:main"
+bili-compare-transcripts = "bili_story_pipe.compare_transcripts:main"
+
+[tool.setuptools.packages.find]
+include = ["bili_story_pipe*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,3 +1,3 @@
-"""bili-story-pipe 模块 B：Map-Reduce 剧情归约 + 联网交叉校验 + 离线剧情浏览器。"""
+"""bili-story-pipe: modular visual-novel video dialogue extraction, Map-Reduce plot structuring, VNDB cross-check, and offline HTML viewer."""
 
-__version__ = "0.1.0"
+__version__ = "0.4.0"

@@ -195,7 +195,15 @@ def decode_frames(
     tmp.mkdir(parents=True, exist_ok=True)
     cmd = build_decode_cmd(ffmpeg, video_path, fps, tmp, roi=roi, ext=ext, hwaccel=hwaccel,
                            max_frames=max_frames)
-    subprocess.run(cmd, check=True, capture_output=True, timeout=3600)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=3600)
+    except subprocess.CalledProcessError:
+        if hwaccel:
+            # Auto-fallback to CPU decode (e.g. AV1 on A100 NVDEC) while keeping GPU OCR
+            cpu_cmd = [c for c in cmd if c not in hwaccel]
+            subprocess.run(cpu_cmd, check=True, capture_output=True, timeout=3600)
+        else:
+            raise
     frames: list[Frame] = []
     for i, path in enumerate(sorted(tmp.glob(f"f_*.{ext}"))):
         frames.append(
